@@ -1,0 +1,1099 @@
+using DanaClientService;
+using DanaPardaz.Dana.ITSM.CommonLib;
+using DanaPardaz.Dana.ITSM.CommonLib.Const;
+using DanaPardaz.Dana.ITSM.CommonLib.Data;
+using DanaPardaz.Dana.ITSM.CommonLib.Net;
+using DanaPardaz.Dana.ITSM.CommonLib.Resources;
+using DanaPardaz.Dana.ITSM.Data;
+using DanaPardaz.Dana.ITSM.Data.DanaModel;
+using DanaPardaz.Dana.ITSM.Data.Dao;
+using DanaPardaz.Dana.ITSM.Data.DataObjects.Dana_Email;
+using DanaPardaz.Dana.ITSM.Data.DataObjects.Settings;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data.SqlClient;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using static DanaPardaz.Dana.ITSM.Data.DataObjects.Settings.PortalInfo;
+
+namespace DanaPardaz.Dana.ITSM.Shell.Services.Dana_Email
+{
+    public class Dana_EmailSevice : IDana_EmailService
+    {
+        #region Dependency Injection
+        private readonly CommonLib.Data.IRepository<Dana.ITSM.Data.DanaModel.Dana_Email> _danaEmailRepository;
+        private readonly CommonLib.Data.IRepository<Dana.ITSM.Data.DanaModel.Dana_EmailDetail> _danaEmailDetailRepository;
+
+        private readonly CommonLib.Data.IRepository<Data.DanaModel.Dana_SentEmail> _sentEmailRepository;
+        private readonly CommonLib.Data.IRepository<Data.DanaModel.Dana_SentEmailAttachment> _sentAttachRepository;
+
+        private readonly CommonLib.Data.IRepository<Dana.ITSM.Data.DanaModel.Dana_OutboxEmail> _outboxRepository;
+        private readonly CommonLib.Data.IRepository<Dana.ITSM.Data.DanaModel.Dana_OutboxEmailAttachment> _outboxattachRepository;
+        private readonly DanaPardaz.Dana.ITSM.Shell.Services.DanaSetting.Config _config;
+        private readonly DanaPardaz.Dana.ITSM.Shell.Services.Dana_OutboxEmailAttachment.IDana_OutboxEmailAttachmentService _outboxEmailAttachmentService;
+        private readonly DanaPardaz.Dana.ITSM.Shell.Services.TicketBody.ITicketBodyService _ticketBodyService;
+        private readonly DanaPardaz.Dana.ITSM.Shell.Services.Dana_OutboxEmail.IDana_OutboxEmailService _outboxEmailService;
+
+        public Dana_EmailSevice(CommonLib.Data.IRepository<Dana.ITSM.Data.DanaModel.Dana_Email> danaEmailRepository,
+             CommonLib.Data.IRepository<Dana.ITSM.Data.DanaModel.Dana_EmailDetail> danaEmailDetailRepository,
+             CommonLib.Data.IRepository<Data.DanaModel.Dana_SentEmail> sentEmailRepository,
+             CommonLib.Data.IRepository<Data.DanaModel.Dana_SentEmailAttachment> sentAttachRepository,
+        CommonLib.Data.IRepository<Dana.ITSM.Data.DanaModel.Dana_OutboxEmail> outboxRepository,
+        CommonLib.Data.IRepository<Dana.ITSM.Data.DanaModel.Dana_OutboxEmailAttachment> outboxattachRepository,
+        DanaPardaz.Dana.ITSM.Shell.Services.DanaSetting.Config config,
+        DanaPardaz.Dana.ITSM.Shell.Services.Dana_OutboxEmailAttachment.IDana_OutboxEmailAttachmentService outboxEmailAttachmentService,
+                           DanaPardaz.Dana.ITSM.Shell.Services.TicketBody.ITicketBodyService ticketBodyService,
+                           DanaPardaz.Dana.ITSM.Shell.Services.Dana_OutboxEmail.IDana_OutboxEmailService outboxEmailService
+        )
+        {
+            System.Threading.Thread.CurrentThread.CurrentCulture = new System.Globalization.CultureInfo("en-US");
+
+            this._danaEmailRepository = danaEmailRepository;
+            this._danaEmailDetailRepository = danaEmailDetailRepository;
+            this._sentEmailRepository = sentEmailRepository;
+            this._sentAttachRepository = sentAttachRepository;
+            this._outboxRepository = outboxRepository;
+            this._outboxattachRepository = outboxattachRepository;
+            _config = config;
+            _outboxEmailAttachmentService = outboxEmailAttachmentService;
+            _ticketBodyService = ticketBodyService;
+            _outboxEmailService = outboxEmailService;
+        }
+        #endregion
+
+        public List<Dana.ITSM.Data.DanaModel.Dana_Email> GetListOfEmails()
+        {
+            List<Dana.ITSM.Data.DanaModel.Dana_Email> list = new List<Data.DanaModel.Dana_Email>();
+            try
+            {
+                list = _danaEmailRepository.Table.ToList();
+                return list;
+            }
+            catch (Exception ex)
+            {
+                return list;
+            }
+
+        }
+        public List<Dana.ITSM.Data.DanaModel.Dana_Email> GetMyEmailsWithAccess()
+        {
+            List<Dana.ITSM.Data.DanaModel.Dana_Email> list = new List<Data.DanaModel.Dana_Email>();
+            try
+            {
+                Guid curretnUserId = CurrentContextHelper.GetCurrentUserId(); ;
+                string query = $@"
+                                DECLARE @sql nvarchar(max)
+                                Set @sql='SELECT * FROM  Dana_Email WHERE UserId ='''+cast(@userId as nvarchar(100))+''''
+                                 EXEC sp_executesql @sql";
+                SqlParameter[] param = new SqlParameter[] { new SqlParameter("@userId", curretnUserId) };
+                using (var context = ContextFactory.GetInstance().CreateMainContext())
+                {
+                    var res = context.ExecuteStoreQuery<Dana.ITSM.Data.DanaModel.Dana_Email>(query, param).ToList();
+                    list = res.ToList();
+                }
+                return list;
+            }
+            catch (Exception ex)
+            {
+                return list;
+            }
+
+        }
+        public List<Dana.ITSM.Data.DanaModel.Dana_Email> GetEmailsWithAccess()
+        {
+            List<Dana.ITSM.Data.DanaModel.Dana_Email> list = new List<Data.DanaModel.Dana_Email>();
+            try
+            {
+                Guid curretnUserId = CurrentContextHelper.GetCurrentUserId(); ;
+                string query = $@"
+                                DECLARE @sql nvarchar(max)
+                                Set @sql='SELECT * FROM  Dana_Email WHERE EmailId in (
+                                SELECT EmailId from Dana_EmailRole where RoleId in  
+                                ( SELECT  RoleId from  aspnet_UsersInRoles 
+                                WHERE UserId ='''+cast(@userId as nvarchar(100))+''' ) ) OR  (UserId ='''+cast(@userId as nvarchar(100))+''')'
+                                 EXEC sp_executesql @sql";
+                SqlParameter[] param = new SqlParameter[] { new SqlParameter("@userId", curretnUserId) };
+                using (var context = ContextFactory.GetInstance().CreateMainContext())
+                {
+                    var res = context.ExecuteStoreQuery<Dana.ITSM.Data.DanaModel.Dana_Email>(query, param).ToList();
+                    list = res.ToList();
+                }
+                return list;
+            }
+            catch (Exception ex)
+            {
+                return list;
+            }
+
+        }
+        public List<Dana.ITSM.Data.DanaModel.Dana_Email> GetOrganizationEmails(Guid id)
+        {
+            List<Dana.ITSM.Data.DanaModel.Dana_Email> list = new List<Data.DanaModel.Dana_Email>();
+            try
+            {
+                string query = string.Empty;
+                Guid curretnUserId = CurrentContextHelper.GetCurrentUserId();
+                if (id == Guid.Parse(CommonLib.Const.Entity.EntityId.Ticket))
+                {
+                    query = $@"
+                                DECLARE @sql nvarchar(max)
+                                Set @sql='SELECT * FROM  Dana_Email WHERE Category=0 AND EmailId in (
+                                SELECT EmailId from Dana_EmailRole where RoleId in  
+                                ( SELECT  RoleId from  aspnet_UsersInRoles 
+                                WHERE UserId ='''+cast(@userId as nvarchar(100))+''' ) )'
+                                 EXEC sp_executesql @sql";
+                }
+                else
+                {
+                    query = $@"
+                                DECLARE @sql nvarchar(max)
+                                Set @sql='SELECT * FROM  Dana_Email WHERE EmailId in (
+                                SELECT EmailId from Dana_EmailRole where RoleId in  
+                                ( SELECT  RoleId from  aspnet_UsersInRoles 
+                                WHERE UserId ='''+cast(@userId as nvarchar(100))+''' ) )'
+                                 EXEC sp_executesql @sql";
+                }
+
+                SqlParameter[] param = new SqlParameter[] { new SqlParameter("@userId", curretnUserId) };
+                using (var context = ContextFactory.GetInstance().CreateMainContext())
+                {
+                    var res = context.ExecuteStoreQuery<Dana.ITSM.Data.DanaModel.Dana_Email>(query, param).ToList();
+                    list = res.ToList();
+                }
+                return list;
+            }
+            catch (Exception ex)
+            {
+                return list;
+            }
+
+        }
+
+        public Dana.ITSM.Data.DanaModel.Dana_Email GetById(Guid id)
+        {
+            Dana.ITSM.Data.DanaModel.Dana_Email data = new Data.DanaModel.Dana_Email();
+            try
+            {
+                data = _danaEmailRepository.GetById(id);
+                return data;
+            }
+            catch (Exception ex)
+            {
+                return data;
+            }
+        }
+
+        public ActionResult SaveEmail(Data.DanaModel.Dana_Email data)
+        {
+            ActionResult result = ActionResult.CreateNew();
+            try
+            {
+
+                if (_danaEmailRepository.Table.Any(a => a.IsDefault && a.Category == EmailCategory.Support) && data.IsDefault && data.Category == EmailCategory.Support)
+                {
+                    var defaultEmails = _danaEmailRepository.Table.Where(a => a.IsDefault && a.Category == EmailCategory.Support).ToList();
+                    defaultEmails.ForEach(item =>
+                    {
+                        item.IsDefault = false;
+                        _danaEmailRepository.Update(item);
+                    });
+                }
+                var currentUser = CurrentContextHelper.GetCurrentUserId();
+                data.CreateDate = DateTime.Now;
+                data.ModifyDate = DateTime.Now;
+                data.ModifyBy = currentUser;
+                data.CreateBy = currentUser;
+                _danaEmailRepository.Insert(data);
+                result.Succeeded = true;
+                result.ResultObject = data.EmailId;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                result.Succeeded = false;
+                result.ResultMessageList.Add(ActionResultMessage.CreateNew(ActionResultMessageTypes.BusinessException, CommonGlossary.ExceptionInSystem));
+                return result;
+            }
+
+        }
+        public Dana.ITSM.Data.DanaModel.Dana_EmailDetail GetDefaultSendDetail()
+        {
+            Dana.ITSM.Data.DanaModel.Dana_EmailDetail data = null;
+            try
+            {
+                var res = _danaEmailRepository.Table.Where(x => x.IsDefault == true && x.Category == EmailCategory.Support).FirstOrDefault();
+                if (res != null)
+                {
+                    if (res.Type == MailSettingType.ExternalEmail)
+                    {
+                        data = _danaEmailDetailRepository.Table.Where(x => x.EmailId == res.Forwarder && x.Type == EmailType.Send).FirstOrDefault();
+                        data.EmailAddress = res.EmailAddress;
+                    }
+                    else
+                    {
+                        data = _danaEmailDetailRepository.Table.Where(x => x.EmailId == res.EmailId && x.Type == EmailType.Send).FirstOrDefault();
+
+                    }
+                }
+                else
+                {
+                    return null;
+                }
+
+                return data;
+            }
+            catch (Exception ex)
+            {
+                return data;
+            }
+        }
+        public Dana.ITSM.Data.DanaModel.Dana_EmailDetail GetDefaultSendDetailTask(Uri uri)
+        {
+            Dana.ITSM.Data.DanaModel.Dana_EmailDetail data = null;
+            try
+            {
+                using (var context = uri == null ? ContextFactory.GetInstance().CreateMainContext() : ContextFactory.GetInstance().CreateMainContext(uri))
+                {
+                    var res = context.Dana_Email.Where(x => x.IsDefault == true && x.Category == EmailCategory.Support).FirstOrDefault();
+                    if (res != null)
+                    {
+                        if (res.Type == MailSettingType.ExternalEmail)
+                        {
+                            data = context.Dana_EmailDetail.Where(x => x.EmailId == res.Forwarder && x.Type == EmailType.Send).FirstOrDefault();
+                            data.EmailAddress = res.EmailAddress;
+                        }
+                        else
+                        {
+                            data = context.Dana_EmailDetail.Where(x => x.EmailId == res.EmailId && x.Type == EmailType.Send).FirstOrDefault();
+
+                        }
+                    }
+                    else
+                    {
+                        return null;
+                    }
+                }
+                return data;
+            }
+            catch (Exception ex)
+            {
+                return data;
+            }
+        }
+        public Dana.ITSM.Data.DanaModel.Dana_Email GetEmailByEmailAddress(string emailAddress)
+        {
+            Dana.ITSM.Data.DanaModel.Dana_Email result = new Data.DanaModel.Dana_Email();
+            try
+            {
+                result = _danaEmailRepository.Table.Where(x => x.EmailAddress == emailAddress).FirstOrDefault();
+                return result;
+            }
+            catch (Exception)
+            {
+
+                throw;
+            }
+        }
+        public Dana.ITSM.Data.DanaModel.Dana_EmailDetail GetSendByEmailAddress(string emailAddress)
+        {
+            Dana.ITSM.Data.DanaModel.Dana_EmailDetail data = new Data.DanaModel.Dana_EmailDetail();
+            try
+            {
+
+                var res = _danaEmailRepository.Table.Where(x => x.EmailAddress == emailAddress && x.Type != MailSettingType.Pop3).FirstOrDefault();
+                if (res != null)
+                {
+                    if (res.Type == MailSettingType.ExternalEmail)
+                    {
+                        data = _danaEmailDetailRepository.Table.Where(x => x.EmailId == res.Forwarder && x.Type == EmailType.Send).FirstOrDefault();
+                        data.EmailAddress = res.EmailAddress;
+                    }
+                    else
+                    {
+                        data = _danaEmailDetailRepository.Table.Where(x => x.EmailId == res.EmailId && x.Type == EmailType.Send).FirstOrDefault();
+
+                    }
+                }
+                else
+                {
+                    data = _danaEmailDetailRepository.Table.Where(x => x.EmailAddress == emailAddress && x.Type == EmailType.Send).FirstOrDefault();
+                }
+
+                return data;
+            }
+            catch (Exception ex)
+            {
+                return data;
+            }
+        }
+        public Dana.ITSM.Data.DanaModel.Dana_EmailDetail GetEmailDetailByEmailAddressForActivity(string emailAddress)
+        {
+            Dana.ITSM.Data.DanaModel.Dana_Email result = new Data.DanaModel.Dana_Email();
+            Dana.ITSM.Data.DanaModel.Dana_EmailDetail data = new Data.DanaModel.Dana_EmailDetail();
+            try
+            {
+                result = _danaEmailRepository.Table.Where(x => x.EmailAddress == emailAddress).FirstOrDefault();
+                if (result != null)
+                {
+                    if (result.Type == MailSettingType.ExternalEmail)
+                    {
+                        data = _danaEmailDetailRepository.Table.Where(x => x.EmailId == result.Forwarder && x.Type == EmailType.Send).FirstOrDefault();
+                        data.EmailAddress = result.EmailAddress;
+                    }
+                    else
+                    {
+                        data = _danaEmailDetailRepository.Table.Where(x => x.EmailId == result.EmailId && x.Type == EmailType.Send).FirstOrDefault();
+                    }
+                }
+                else
+                {
+                    return null;
+                }
+                return data;
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+        }
+        public List<Dana.ITSM.Data.DanaModel.Dana_EmailDetail> GetSendDetails(EmailType type, Uri uri = null)
+        {
+            List<Dana.ITSM.Data.DanaModel.Dana_EmailDetail> details = new List<Dana.ITSM.Data.DanaModel.Dana_EmailDetail>();
+            Dana.ITSM.Data.DanaModel.Dana_EmailDetail detail = new Dana.ITSM.Data.DanaModel.Dana_EmailDetail();
+            try
+            {
+                using (var context = uri == null ? ContextFactory.GetInstance().CreateMainContext() : ContextFactory.GetInstance().CreateMainContext(uri))
+                {
+                    //var repo = _danaEmailRepository;
+                    var res = context.Dana_Email.ToList();
+                    for (int i = 0; i < res.Count; i++)
+                    {
+                        detail = new Dana.ITSM.Data.DanaModel.Dana_EmailDetail();
+                        var b = res[i];
+                        if (b.Type == MailSettingType.ExternalEmail)
+                        {
+                            detail = context.Dana_EmailDetail.Where(x => x.EmailId == b.Forwarder && x.Type == type).FirstOrDefault();
+                            if (detail != null)
+                            {
+                                detail.EmailAddress = b.EmailAddress;
+                                detail.DisplayName = b.DisplayName;
+                                detail.Category = b.Category.Value;
+                            }
+                        }
+                        else if (b.Type == MailSettingType.DanaDeskEmail)
+                        {
+                            detail = context.Dana_EmailDetail.Where(x => x.EmailId == b.EmailId && x.Type == type).FirstOrDefault();
+                            if (detail != null)
+                            {
+                                detail.DisplayName = b.DisplayName;
+                                detail.Category = b.Category.Value;
+                            }
+                        }
+                        else
+                        {
+                            detail = context.Dana_EmailDetail.Where(x => x.EmailId == b.EmailId && x.Type == type).FirstOrDefault();
+                            detail.Category = b.Category.Value;
+                        }
+                        if (detail != null)
+                        {
+                            details.Add(detail);
+                        }
+
+                    }
+
+                    return details;
+                }
+            }
+            catch (Exception ex)
+            {
+                return details;
+            }
+        }
+
+        public Data.DanaModel.Dana_Email GetDefault()
+        {
+            Dana.ITSM.Data.DanaModel.Dana_Email data = new Data.DanaModel.Dana_Email();
+            try
+            {
+                data = _danaEmailRepository.Table.Where(x => x.IsDefault == true).FirstOrDefault();
+                return data;
+            }
+            catch (Exception ex)
+            {
+                return data;
+            }
+        }
+
+        public ActionResult UpdateEmail(Dana.ITSM.Data.DanaModel.Dana_Email data)
+        {
+            ActionResult result = ActionResult.CreateNew();
+            try
+            {
+                if (_danaEmailRepository.Table.Any(a => a.IsDefault && a.Category == EmailCategory.Support && a.EmailId != data.EmailId) && data.IsDefault && data.Category == EmailCategory.Support)
+                {
+                    var defaultEmails = _danaEmailRepository.Table.Where(a => a.IsDefault && a.Category == EmailCategory.Support && a.EmailId != data.EmailId).ToList();
+                    defaultEmails.ForEach(item =>
+                    {
+                        item.IsDefault = false;
+                        _danaEmailRepository.Update(item);
+                    });
+                }
+                var currentUser = CurrentContextHelper.GetCurrentUserId();
+                data.ModifyDate = DateTime.Now;
+                _danaEmailRepository.Update(data);
+                result.ResultObject = data.EmailId;
+                result.Succeeded = true;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                result.Succeeded = false;
+                result.ResultMessageList.Add(ActionResultMessage.CreateNew(ActionResultMessageTypes.Info, CommonGlossary.ExceptionInSystem));
+                return result;
+            }
+        }
+        public ActionResult DeleteEmail(Data.DanaModel.Dana_Email data)
+        {
+            ActionResult result = ActionResult.CreateNew();
+            try
+            {
+                _danaEmailRepository.Delete(data);
+                result.Succeeded = true;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                result.Succeeded = false;
+                return result;
+            }
+
+        }
+
+        public ActionResult SendEmail(SendEmailDto data)
+        {
+            Func<IEnumerable<Data.DataObjects.Attatchment.IAttatchment>, string, List<SerializableKeyValuePair<string, Stream>>> GetFilesStream = (fileAttachments, fileAttachmentPath) =>
+           {
+               var filelist = new List<SerializableKeyValuePair<string, Stream>>();
+               foreach (var item in fileAttachments)
+               {
+                   if (string.IsNullOrEmpty(item.FileName) == false)
+                   {
+                       string fullpath = fileAttachmentPath + item.FilePath.Replace("~/", "/");
+                       if (File.Exists(fullpath))
+                       {
+
+                           filelist.Add(new SerializableKeyValuePair<string, Stream>(item.FileName, File.OpenRead(fullpath)));
+                       }
+                   }
+               }
+               return filelist;
+           };
+            ActionResult result = ActionResult.CreateNew();
+            try
+            {
+                string FileAttachmentPath = string.Empty;
+                DanaPardaz.Dana.ITSM.Data.DataObjects.Settings.DanaSetting _danaSetting = new DanaPardaz.Dana.ITSM.Data.DataObjects.Settings.DanaSetting();
+                Dana_Setting _dana_Setting = new Dana_Setting();
+                _dana_Setting = new Shell.Controllers.GeneralPolicyController().GetDanaSetting();
+
+                List<SerializableKeyValuePair<string, Stream>> lstAttatch = null;
+                _danaSetting = _danaSetting.ConvertXmlToObject(_dana_Setting.SettingBody);
+                if (_danaSetting != null)
+                {
+                    FileAttachmentPath = _danaSetting.FileRepositoryPath;
+                }
+
+                Data.DanaModel.Dana_EmailDetail defaultEmail = GetDefaultSendDetail();
+
+                if (data.Emailattachments != null && data.Emailattachments.Count > 0)
+                {
+                    lstAttatch = GetFilesStream.Invoke(data.Emailattachments, FileAttachmentPath);
+                }
+                var currentUser = CurrentContextHelper.GetCurrentUserId();
+                result.ResultMessageList.Add(ActionResultMessage.CreateNew(ActionResultMessageTypes.Info, Dana.ITSM.CommonLib.Resources.CommonMessage.SendEmailProblem));
+
+                Guid OutboxEmailId = Guid.NewGuid();
+                Dana.ITSM.Data.DanaModel.Dana_OutboxEmail outbox = new Dana.ITSM.Data.DanaModel.Dana_OutboxEmail();
+                outbox.OutboxEmailId = OutboxEmailId;
+                outbox.Subject = data.Subject;
+                outbox.Body = data.Body;
+                outbox.EmailBCC = data.BCC;
+                outbox.EmailCc = data.CC;
+                outbox.EmailFrom = defaultEmail.EmailAddress;
+                outbox.EmailTo = data.EmailTo;
+                outbox.EntityId = data.EntityId;
+                outbox.RefId = data.RefId.Value;
+                outbox.Status = (byte)EmailStatus.Wating;
+                outbox.AttemptCount = 1;
+                outbox.CreateBy = currentUser;
+                outbox.CreateDate = outbox.SendDate = DateTime.Now;
+                outbox.IsRemoved = false;
+                ActionResult ar = ActionResult.CreateNew();
+                ar.Succeeded = false;
+                try
+                {
+                    if (!string.IsNullOrEmpty(outbox.EmailTo) && (!outbox.EmailTo.Contains("-DELETED")))
+                    {
+                        _outboxRepository.Insert(outbox);
+                        ar.Succeeded = true;
+                    }
+
+                }
+                catch (Exception ex)
+                {
+
+                    ar.Succeeded = false;
+                }
+
+
+                if (data.Emailattachments != null && data.Emailattachments.Count > 0)
+                {
+                    List<Data.DataObjects.Attatchment.IAttatchment> attach = data.Emailattachments.ToList();
+                    for (int j = 0; j < attach.Count; j++)
+                    {
+                        Data.DanaModel.Dana_OutboxEmailAttachment file = new Data.DanaModel.Dana_OutboxEmailAttachment();
+                        file.OutboxEmailAttachmentId = Guid.NewGuid();
+                        file.OutboxEmailId = OutboxEmailId;
+                        file.FileName = attach[j].FileName;
+                        file.FilePath = attach[j].FilePath;
+                        file.Size = attach[j].Size;
+                        ActionResult actRes = ActionResult.CreateNew();
+
+                        try
+                        {
+
+
+                            this._outboxattachRepository.Insert(file);
+                            actRes.Succeeded = true;
+
+
+
+                        }
+                        catch (Exception)
+                        {
+
+                            actRes.Succeeded = false;
+                        }
+                    }
+                }
+                result.Succeeded = true;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                result.Succeeded = false;
+                return result;
+            }
+        }
+
+        /// <summary>
+        /// ارسال ایمیل بصورت مستقیم انجام میشود. اگر انجام نشود، یکبار تلاش میکند. اگر انجام شد، در جدول ارسال شده ها ثبت میگردد.
+        /// </summary>
+        /// <param name="emailDto">اطلاعات ارسال ایمیل</param>
+        /// <param name="entityId">موجودیت مربوطه</param>
+        /// <param name="createBy">ایجاد شده توسط</param>
+        public bool SendDirectEmail(SendDirectEmailDto emailDto, Guid createBy = default, Guid? entityId = null, Guid? refId = null,Uri currentUri = null)
+        {
+            var background = new BackgroundWorker();
+            if (currentUri == null)
+            {
+                currentUri = System.Web.HttpContext.Current.Request.Url;
+            }
+
+            #region اگر ایمیل از طرف me بود
+            if (emailDto != null && emailDto.From != null && emailDto.From == "me")
+            {
+                var defaultEmail = this.GetDefaultSendDetail();
+                if (defaultEmail == null || defaultEmail.EmailAddress == null || defaultEmail.EmailAddress == "")
+                {
+                    throw new Exception("ایمیل پیش فرض یافت نشد");
+                }
+                emailDto.From = defaultEmail.EmailAddress;
+            }
+            #endregion
+
+            background.DoWork += Background_DoWork;
+
+            Data.DanaModel.Dana_EmailDetail email = new Data.DanaModel.Dana_EmailDetail();
+
+            if (emailDto.From == "notification@danapardaz.com")
+            {
+                email = new Data.DanaModel.Dana_EmailDetail()
+                {
+                    EmailAddress = "notification@danapardaz.com",
+                    UserName = "notification@danapardaz.com",
+                    DisplayName = string.IsNullOrEmpty(emailDto.DisplayName)?DanaPardaz.Dana.ITSM.CommonLib.Resources.CommonGlossary.DanaChat: emailDto.DisplayName,
+                    Password = CryptographyHelper.Encrypt("NotificatioN@110"),
+                    Protocol = EmailProtocol.SMTPS,
+                    Port = 587,
+                    ServerEmail = "email.danapardaz.com"
+                };
+            }
+            else
+            {
+                List<Data.DanaModel.Dana_EmailDetail> list = new List<Data.DanaModel.Dana_EmailDetail>();
+                list = GetSendDetails(EmailType.Send, currentUri);
+                email = list.FirstOrDefault(x => x.EmailAddress == emailDto.From);
+            }
+
+                var config = _config.SetConfig(currentUri); // درواقع به دلیل مولتی تسک بودن این عملیات مقدار uri ما null که آن را به متده مربوطه ارسال کردیم
+                var uri = currentUri;
+
+                Data.DanaModel.Dana_EmailDetail sendEmail = new Data.DanaModel.Dana_EmailDetail();
+                sendEmail.DisplayName = email.DisplayName;
+                sendEmail.EmailAddress = email.EmailAddress;
+                sendEmail.EmailDetailId = email.EmailDetailId;
+                sendEmail.DisplayName = email.DisplayName;
+                sendEmail.EmailId = email.EmailId;
+                sendEmail.Password = email.Password;
+                sendEmail.Port = email.Port;
+                sendEmail.Protocol = email.Protocol;
+                sendEmail.ServerEmail = email.ServerEmail;
+                sendEmail.Type = email.Type;
+                sendEmail.UserName = email.UserName;
+
+            bool isEmailSent = Process(emailDto, sendEmail, config, entityId, refId, uri);
+
+            return isEmailSent;
+
+            //background.RunWorkerAsync(argument: WorkerArgument);
+        }
+
+        private void Background_DoWork(object sender, DoWorkEventArgs e)
+        {
+            var argument = (SendDirectEmailObject)e.Argument;
+            var emailDto = argument.emailDto;
+            var entityId = argument.entityId;
+            var refId = argument.refId;
+            var createBy = argument.createBy;
+            var email = argument.email;
+            var config = argument.config as DanaSetting.Config;
+            var uri = argument.uri;
+            bool isSentSucceded = false;
+            var messageId = argument.emailDto.MessageId;
+            if (email != null)
+            {
+                Data.DanaModel.Dana_EmailDetail sendEmail = new Data.DanaModel.Dana_EmailDetail();
+                sendEmail.DisplayName = email.DisplayName;
+                sendEmail.EmailAddress = email.EmailAddress;
+                sendEmail.EmailDetailId = email.EmailDetailId;
+                sendEmail.DisplayName = email.DisplayName;
+                sendEmail.EmailId = email.EmailId;
+                sendEmail.Password = email.Password;
+                sendEmail.Port = email.Port;
+                sendEmail.Protocol = email.Protocol;
+                sendEmail.ServerEmail = email.ServerEmail;
+                sendEmail.Type = email.Type;
+                sendEmail.UserName = email.UserName;
+                //////// *****************
+                //Do Process
+                try
+                {
+                    // Map RefId to body.
+                    if (refId.HasValue)
+                        emailDto.Body = emailDto.Body.Replace("55555555-5555-5555-5555-555555555555", refId.ToString());
+                    emailDto.Body = emailDto.Body.Replace("blob:", "");
+
+                    // Send email.
+                    isSentSucceded = Process(emailDto, sendEmail, config, entityId, refId, uri);
+                    // Map sent box email.
+                    var sentBox = new Data.DanaModel.Dana_SentEmail(emailDto.From, emailDto.To, emailDto.CC,
+                        emailDto.BCC, emailDto.Subject, emailDto.Body, entityId, createBy, refId);
+
+                    if (isSentSucceded)
+                    {
+                        // Insert to sent email.
+                        InsertSentEmail(sentBox, uri);
+                    }
+                    else
+                    {
+                        // Try again, after 5s.
+                        Task.Delay(5000);
+                        // Send email again.
+                        isSentSucceded = Process(emailDto, sendEmail, config, entityId, refId, uri);
+                        if (isSentSucceded)
+                        {
+                            // Insert to sent email.
+                            InsertSentEmail(sentBox, uri);
+                        }
+                        else
+                        {
+                            // Insert to outbox.
+                            var outBox = new Data.DanaModel.Dana_OutboxEmail()
+                            {
+                                OutboxEmailId = Guid.NewGuid(),
+                                DisplayName = emailDto.DisplayName,
+                                Subject = emailDto.Subject,
+                                Body = emailDto.Body,
+                                EmailFrom = emailDto.From,
+                                EmailTo = emailDto.To,
+                                EmailBCC = emailDto.BCC,
+                                EmailCc = emailDto.CC,
+                                EntityId = entityId,
+                                RefId = refId,
+                                CreateBy = createBy,
+                                CreateDate = DateTime.Now,
+                                SendDate = DateTime.Now,
+                                AttemptCount = 2,
+                            };
+                            InsertOutboxEmail(outBox, uri);
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    // TODO:
+                    // Log here.
+                    isSentSucceded = false;
+                }
+            }
+        }
+        private void InsertSentEmail(Data.DanaModel.Dana_SentEmail sentEmail, Uri uri = null)
+        {
+            using (var context = uri == null ? ContextFactory.GetInstance().CreateMainContext() : ContextFactory.GetInstance().CreateMainContext(uri))
+            {
+                context.Dana_SentEmail.Add(sentEmail);
+                context.SaveChanges();
+            }
+        }
+        private void InsertOutboxEmail(Data.DanaModel.Dana_OutboxEmail outboxEmail, Uri uri = null)
+        {
+            using (var context = uri == null ? ContextFactory.GetInstance().CreateMainContext() : ContextFactory.GetInstance().CreateMainContext(uri))
+            {
+                context.Dana_OutboxEmail.Add(outboxEmail);
+                context.SaveChanges();
+            }
+        }
+        public bool Process(SendDirectEmailDto message, Data.DanaModel.Dana_EmailDetail detailEmail, DanaSetting.Config config, Guid? entityId = null, Guid? refId = null, Uri uri = null)
+        {
+            try
+            {
+                string fileAttachmentPath = config.FileRepositoryPath;
+                string fileAPIRepositoryPath = config.FileAPIRepositoryPath;
+                string urlAddress = config.UrlLink;
+
+                List<SerializableKeyValuePair<string, System.IO.Stream>> attachsStream = null;
+                string messageId = message.MessageId!=null? message.MessageId : $"{Guid.NewGuid()}@danapardaz.com";
+                string messagestr = string.Empty;
+                string body = string.Empty;
+                if (message.Attachments != null && message.Attachments.Count() > 0)
+                {
+                    attachsStream = GetSerializeFilesStream(message.Attachments, fileAttachmentPath);
+                }
+                if (message.Body.Contains("/FileRepository/"))
+                {
+                    message.Body = message.Body.Replace("/Dana/FileRepository", urlAddress + "/FileRepository");
+                }
+                if (message.Body.Contains("<head>"))
+                {
+                    body = message.Body;
+                }
+                else
+                {
+                    try
+                    {
+                        if (fileAPIRepositoryPath != null)
+                        {
+                            body = File.ReadAllText(fileAPIRepositoryPath + FileNameConsts.EmailFileDirectories.EmailTemplate.Replace("~", ""));
+                            message.Body = message.Body.Replace("blob:", "");
+                            message.Body = "<div style=\"direction:rtl;text-align:right;font-family: 'iransans','tahoma', 'B YEKAN', Helvetica, Arial, sans-serif;\" dir =\"rtl\">" + message.Body + "</div>";
+                            body = body.Replace("##body##", message.Body);
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        message.Body = message.Body.Replace("blob:", "");
+                        message.Body = "<div style=\"direction:rtl;text-align:right;font-family: 'iransans','tahoma', 'B YEKAN', Helvetica, Arial, sans-serif;\" dir =\"rtl\">" + message.Body + "</div>";
+                        body = message.Body;
+                    }
+                    body = body.Replace("blob:", "");
+                    body = "<div style=\"direction:rtl;text-align:right;font-family: 'iransans','tahoma', 'B YEKAN', Helvetica, Arial, sans-serif;\" dir =\"rtl\">" + body + "</div>";
+                }
+                var checkTicketBodyIsOk = true;
+                if (entityId.HasValue)
+                    if (entityId == Guid.Parse(CommonLib.Const.Entity.EntityId.TicketBody) && refId != Guid.Empty)
+                    {
+                        //try
+                        //{
+                        //    messagestr = $"<{messageId}>";
+                        //    _ticketBodyService.UpdateMessageId(refId, messageId, uri);
+                        //    checkTicketBodyIsOk = true;
+                        //}
+                        //catch
+                        //{
+                        //    checkTicketBodyIsOk = false;
+                        //}
+                        try
+                        {
+                            var result = _ticketBodyService.UpdateTicketMessageId(refId, messageId, uri);
+                            messagestr = $"<{result}>";
+
+
+                            checkTicketBodyIsOk = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            checkTicketBodyIsOk = false;
+                        }
+                    }
+                if (string.IsNullOrEmpty(messagestr))
+                {
+                    messagestr = $"<{messageId}>";
+                }
+                if (checkTicketBodyIsOk)
+                {
+                    ActionResult result = EmailHelper.SendEmail(
+                          message.From,
+                           message.To,
+                           message.CC,
+                           message.BCC,
+                           detailEmail.UserName,
+                           DanaPardaz.Dana.ITSM.CommonLib.CryptographyHelper.Decrypt(detailEmail.Password),
+                           detailEmail.ServerEmail,
+                           detailEmail.Port,
+                           message.Subject,
+                           body,
+                           detailEmail.Protocol,
+                           7000,
+                           attachsStream,
+                           messagestr,
+                           string.IsNullOrEmpty(message.DisplayName) == false ? message.DisplayName : detailEmail.DisplayName
+                           );
+
+                    return result.Succeeded;
+                }
+                return checkTicketBodyIsOk;
+            }
+            catch (Exception ex)
+            {
+
+                return false;
+            }
+        }
+
+        private List<SerializableKeyValuePair<string, Stream>> GetFilesStream(List<Data.DanaModel.Dana_SentEmailAttachment> fileAttachments = null)
+        {
+            Config config = Config.GetInstance();
+
+            var filelist = new List<SerializableKeyValuePair<string, Stream>>();
+            string[] fileNames;
+            foreach (var item in fileAttachments)
+            {
+                if (string.IsNullOrEmpty(item.FileName) == false)
+                {
+                    string fullpath = config.ConfigPath + item.FilePath.Replace("~/", "/");
+                    if (File.Exists(fullpath))
+                    {
+                        filelist.Add(new SerializableKeyValuePair<string, Stream>(item.FileName, File.OpenRead(fullpath)));
+                    }
+                }
+            }
+            return filelist;
+        }
+
+        public ActionResult SendVerifyEmail(Guid id)
+        {
+            ActionResult result = ActionResult.CreateNew();
+            try
+            {
+                Data.DanaModel.Dana_Email data = _danaEmailRepository.GetById(id);
+                Data.DanaModel.Dana_EmailDetail defaultEmail = GetDefaultSendDetail();
+                if (defaultEmail != null)
+                {
+                    string urlAddress = string.Empty;
+                    Dana_Setting urllink = SettingDao.GetInstance().GetSetting(PortalInfo.GetUrlLinkSettingKey());
+                    if (urllink != null)
+                    {
+                        UrlLinkSetting linkSetting = PortalInfo.ConvertUrlLinkXmlToObject(urllink.SettingBody);
+                        urlAddress = linkSetting.UrlLink;
+                    }
+                    Int64 timeStamp = DateTime.Now.ToFileTime();
+                    string hash = CryptographyHelper.GetSha1(data.EmailId + "#" + data.EmailAddress + "#" + timeStamp);
+                    hash = hash + "@" + data.EmailId + "#" + timeStamp;
+                    string encrypt = CryptographyHelper.Encrypt(hash);
+                    Dana_Setting dana_Setting = new Dana_Setting();
+                    dana_Setting = new Shell.Controllers.GeneralPolicyController().GetDanaSetting();
+                    DanaPardaz.Dana.ITSM.Data.DataObjects.Settings.DanaSetting _danaSetting = new DanaPardaz.Dana.ITSM.Data.DataObjects.Settings.DanaSetting();
+                    _danaSetting = _danaSetting.ConvertXmlToObject(dana_Setting.SettingBody);
+                    string path = _danaSetting.FileAPIRepositoryPath;
+
+                    string body = File.ReadAllText(path + FileNameConsts.EmailFileDirectories.ApproveEmail.Replace("~", ""));
+                    var subject = $"تایید و فعال سازی ایمیل آدرس";
+                    var _generalController = new DanaPardaz.Dana.ITSM.Shell.Controllers.GeneralController();
+
+                    var companyInfo = _generalController.GetCompanyInfo();
+                    var logoInfo = _generalController.GetLogoImageFromCompanyInfo(companyInfo);
+                    body = body.Replace("#COMPANYNAME#", companyInfo.CompanyName);
+
+                    body = body.Replace("#LOGOSRC#", logoInfo.LogoImage);
+
+                    body = body.Replace("#logoheight#", logoInfo.LogoHeight.ToString());
+                    body = body.Replace("#logowidth#", logoInfo.LogoWidth.ToString());
+
+                    body = body.Replace("#COMPANYADDRESS#", companyInfo.CompanyAddress);
+                    body = body.Replace("#WEBSITEADDRESS#", companyInfo.CompanyWebsite);
+                    DanaPardaz.Dana.ITSM.Shell.Controllers.ShortUrl.ShortUrlController shortUrl = new Shell.Controllers.ShortUrl.ShortUrlController();
+                    var url = shortUrl.InsertUrl("/Shared/Public/ApproveEmail.aspx?t=" + encrypt);
+
+                    body = body.Replace("#URL#", url);
+
+                    result = EmailHelper.SendEmail(defaultEmail.EmailAddress, data.EmailAddress, defaultEmail.DisplayName, string.Empty, string.Empty,
+                                                   defaultEmail.UserName, CryptographyHelper.Decrypt(defaultEmail.Password), defaultEmail.ServerEmail, defaultEmail.Port,
+                                                   subject, body, defaultEmail.Protocol, 10000);
+                    if (result.Succeeded == false)
+                    {
+                        result.Succeeded = false;
+                        result.ResultMessageList.Add(ActionResultMessage.CreateNew(ActionResultMessageTypes.Info, Dana.ITSM.CommonLib.Resources.CommonMessage.SendEmailProblem));
+                    }
+                    else
+                    {
+                        result.Succeeded = true;
+                        result.ResultMessageList.Add(ActionResultMessage.CreateNew(ActionResultMessageTypes.Info, Dana.ITSM.CommonLib.Resources.CommonMessage.ConfirmEmailFoApproveEmail));
+                    }
+                }
+                return result;
+            }
+
+
+            catch (Exception ex)
+            {
+
+                throw;
+            }
+        }
+
+        public bool EmailExists(string emailAddress)
+        {
+            return _danaEmailRepository.Table.Any(item => item.EmailAddress == emailAddress && item.IsRemoved == false);
+        }
+
+        private List<KeyValuePair<string, Stream>> GetFilesStream(string fileRepository, DanaPardaz.Dana.ITSM.Data.DanaModel.Dana_Message message, string attachments = null, List<Dana_FileAttachment> fileAttachments = null, string fileAttachmentPath = null)
+        {
+            var filelist = new List<KeyValuePair<string, Stream>>();
+            string[] fileNames;
+            if (attachments == null && fileAttachments.Count == 0)
+                return filelist;
+
+            if (attachments != null && fileAttachments.Count == 0)
+            {
+                fileNames = attachments.Split(',');
+                foreach (var filename in fileNames)
+                {
+                    if (!string.IsNullOrEmpty(filename))
+                    {
+                        var fullpath = fileRepository + message.MessageID + "\\" + filename;
+                        if (File.Exists(fullpath))
+                        {
+                            filelist.Add(new KeyValuePair<string, Stream>(filename, File.OpenRead(fullpath)));
+                        }
+                    }
+                }
+            }
+            else
+            {
+
+                foreach (var item in fileAttachments)
+                {
+                    if (string.IsNullOrEmpty(item.FileName) == false)
+                    {
+                        string fullpath = fileAttachmentPath + item.FileAddress.Replace("~/", "/");
+                        if (File.Exists(fullpath))
+                        {
+                            filelist.Add(new KeyValuePair<string, Stream>(item.FileName, File.OpenRead(fullpath)));
+                        }
+                    }
+                }
+
+            }
+            return filelist;
+        }
+        public static List<SerializableKeyValuePair<string, System.IO.Stream>> GetSerializeFilesStream(IEnumerable<Data.DataObjects.Attatchment.IAttatchment> fileAttachments, string fileAttachmentPath, bool isActivity = false)
+        {
+            var filelist = new List<SerializableKeyValuePair<string, System.IO.Stream>>();
+
+            string fullpath = string.Empty;
+            foreach (var item in fileAttachments)
+            {
+                if (string.IsNullOrEmpty(item.FileName) == false)
+                {
+                    if (isActivity)
+                    {
+                        var attach = CRM_ActivityDao.GetInstance().GetActivityAttachmentById(Guid.Parse(item.FilePath));
+                        fullpath = attach != null ? fileAttachmentPath + attach.FilePath.Replace("~/", "/") : string.Empty;
+
+                    }
+                    else
+                    {
+
+                        fullpath = fileAttachmentPath + item.FilePath.Replace("~/", "/");
+                    }
+                    if (System.IO.File.Exists(fullpath))
+                    {
+                        filelist.Add(new SerializableKeyValuePair<string, System.IO.Stream>(item.FileName, System.IO.File.OpenRead(fullpath)));
+                    }
+                }
+            }
+            return filelist;
+        }
+
+        private List<KeyValuePair<string, Stream>> GetFilesStream(List<DanaPardaz.Dana.ITSM.Data.DanaModel.Dana_SentEmailAttachment> fileAttachments = null, string fileAttachmentPath = null)
+        {
+            var filelist = new List<KeyValuePair<string, Stream>>();
+            string[] fileNames;
+
+            foreach (var item in fileAttachments)
+            {
+                if (string.IsNullOrEmpty(item.FileName) == false)
+                {
+                    string fullpath = fileAttachmentPath + item.FilePath.Replace("~/", "/");
+                    if (File.Exists(fullpath))
+                    {
+                        filelist.Add(new KeyValuePair<string, Stream>(item.FileName, File.OpenRead(fullpath)));
+                    }
+                }
+            }
+
+
+            return filelist;
+        }
+        private List<KeyValuePair<string, Stream>> GetFilesStream(List<DanaPardaz.Dana.ITSM.Data.DanaModel.Dana_OutboxEmailAttachment> fileAttachments = null, string fileAttachmentPath = null)
+        {
+            var filelist = new List<KeyValuePair<string, Stream>>();
+            string[] fileNames;
+
+            foreach (var item in fileAttachments)
+            {
+                if (string.IsNullOrEmpty(item.FileName) == false)
+                {
+                    string fullpath = fileAttachmentPath + item.FilePath.Replace("~/", "/");
+                    if (File.Exists(fullpath))
+                    {
+                        filelist.Add(new KeyValuePair<string, Stream>(item.FileName, File.OpenRead(fullpath)));
+                    }
+                }
+            }
+            return filelist;
+        }
+        private DanaPardaz.Dana.ITSM.CommonLib.ActionResult OutboxEmailSendingStatus(Guid outboxEmailId, Uri uri)
+        {
+            DanaPardaz.Dana.ITSM.CommonLib.ActionResult result = DanaPardaz.Dana.ITSM.CommonLib.ActionResult.CreateNew();
+            try
+            {
+                result = _outboxEmailService.ChangeSendingStatus(outboxEmailId, uri);
+            }
+            catch (Exception ex)
+            {
+                result.Succeeded = false;
+            }
+
+            return result;
+        }
+    }
+    public class DanaEmailDetailDto
+    {
+        public Data.DanaModel.Dana_EmailDetail EmailDetail { get; set; }
+        public Uri Uri { get; set; }
+    }
+}
