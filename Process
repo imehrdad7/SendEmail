@@ -1,0 +1,106 @@
+ public bool Process(SendDirectEmailDto message, Data.DanaModel.Dana_EmailDetail detailEmail, DanaSetting.Config config, Guid? entityId = null, Guid? refId = null, Uri uri = null)
+        {
+            try
+            {
+                string fileAttachmentPath = config.FileRepositoryPath;
+                string fileAPIRepositoryPath = config.FileAPIRepositoryPath;
+                string urlAddress = config.UrlLink;
+
+                List<SerializableKeyValuePair<string, System.IO.Stream>> attachsStream = null;
+                string messageId = message.MessageId!=null? message.MessageId : $"{Guid.NewGuid()}@danapardaz.com";
+                string messagestr = string.Empty;
+                string body = string.Empty;
+                if (message.Attachments != null && message.Attachments.Count() > 0)
+                {
+                    attachsStream = GetSerializeFilesStream(message.Attachments, fileAttachmentPath);
+                }
+                if (message.Body.Contains("/FileRepository/"))
+                {
+                    message.Body = message.Body.Replace("/Dana/FileRepository", urlAddress + "/FileRepository");
+                }
+                if (message.Body.Contains("<head>"))
+                {
+                    body = message.Body;
+                }
+                else
+                {
+                    try
+                    {
+                        if (fileAPIRepositoryPath != null)
+                        {
+                            body = File.ReadAllText(fileAPIRepositoryPath + FileNameConsts.EmailFileDirectories.EmailTemplate.Replace("~", ""));
+                            message.Body = message.Body.Replace("blob:", "");
+                            message.Body = "<div style=\"direction:rtl;text-align:right;font-family: 'iransans','tahoma', 'B YEKAN', Helvetica, Arial, sans-serif;\" dir =\"rtl\">" + message.Body + "</div>";
+                            body = body.Replace("##body##", message.Body);
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        message.Body = message.Body.Replace("blob:", "");
+                        message.Body = "<div style=\"direction:rtl;text-align:right;font-family: 'iransans','tahoma', 'B YEKAN', Helvetica, Arial, sans-serif;\" dir =\"rtl\">" + message.Body + "</div>";
+                        body = message.Body;
+                    }
+                    body = body.Replace("blob:", "");
+                    body = "<div style=\"direction:rtl;text-align:right;font-family: 'iransans','tahoma', 'B YEKAN', Helvetica, Arial, sans-serif;\" dir =\"rtl\">" + body + "</div>";
+                }
+                var checkTicketBodyIsOk = true;
+                if (entityId.HasValue)
+                    if (entityId == Guid.Parse(CommonLib.Const.Entity.EntityId.TicketBody) && refId != Guid.Empty)
+                    {
+                        //try
+                        //{
+                        //    messagestr = $"<{messageId}>";
+                        //    _ticketBodyService.UpdateMessageId(refId, messageId, uri);
+                        //    checkTicketBodyIsOk = true;
+                        //}
+                        //catch
+                        //{
+                        //    checkTicketBodyIsOk = false;
+                        //}
+                        try
+                        {
+                            var result = _ticketBodyService.UpdateTicketMessageId(refId, messageId, uri);
+                            messagestr = $"<{result}>";
+
+
+                            checkTicketBodyIsOk = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            checkTicketBodyIsOk = false;
+                        }
+                    }
+                if (string.IsNullOrEmpty(messagestr))
+                {
+                    messagestr = $"<{messageId}>";
+                }
+                if (checkTicketBodyIsOk)
+                {
+                    ActionResult result = EmailHelper.SendEmail(
+                          message.From,
+                           message.To,
+                           message.CC,
+                           message.BCC,
+                           detailEmail.UserName,
+                           DanaPardaz.Dana.ITSM.CommonLib.CryptographyHelper.Decrypt(detailEmail.Password),
+                           detailEmail.ServerEmail,
+                           detailEmail.Port,
+                           message.Subject,
+                           body,
+                           detailEmail.Protocol,
+                           7000,
+                           attachsStream,
+                           messagestr,
+                           string.IsNullOrEmpty(message.DisplayName) == false ? message.DisplayName : detailEmail.DisplayName
+                           );
+
+                    return result.Succeeded;
+                }
+                return checkTicketBodyIsOk;
+            }
+            catch (Exception ex)
+            {
+
+                return false;
+            }
+        }
